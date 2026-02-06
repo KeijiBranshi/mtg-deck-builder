@@ -1,0 +1,58 @@
+// Template: Command Zone Template
+// Description: Based on the Command Zone's deck building template.
+//   Cards can belong to multiple categories, so slot totals (108)
+//   exceed the 100-card deck size. When tagging cards, apply all
+//   categories that fit -- e.g. Rishkar's Expertise is both
+//   #Ramp and #CardAdvantage.
+//
+// Category Definitions (Command Zone):
+//
+//   Ramp - Cards that accelerate your mana production ahead of
+//     curve: mana rocks (Sol Ring), mana dorks (Llanowar Elves),
+//     land ramp spells (Cultivate), cost reducers, and rituals.
+//
+//   CardAdvantage - Cards that generate net card advantage or
+//     meaningful card selection. This includes:
+//       - Hard draw (Rhystic Study, Harmonize)
+//       - Repeatable draw engines (Phyrexian Arena)
+//       - Impulse/exile draw (Light Up the Stage)
+//       - Tutors and recursion engines
+//       - Token generators that replace themselves
+//       - Scry and surveil effects that improve card quality
+//     Note: Pure draw is the strongest form, but scry/surveil
+//     still count as card advantage since they reduce the number
+//     of dead draws. Weight draw effects more heavily when
+//     evaluating whether the deck has enough in this category.
+//
+//   TargetedDisruption - Cards that answer a single specific
+//     threat: spot removal (Swords to Plowshares), counterspells
+//     (Counterspell), targeted exile (Anguished Unmaking),
+//     targeted discard, and single-permanent bounce.
+//
+//   MassDisruption - Cards that affect multiple permanents,
+//     cards, or resources at once. This is a spectrum:
+//       - Full board wipes (Wrath of God, Farewell) - broadest
+//         blast radius, affect all players and/or all card types
+//       - Asymmetric wipes (Cyclonic Rift, Plague Wind) - hit
+//         opponents but spare you
+//       - Narrow mass removal (Vandalblast overloaded, mass
+//         -X/-X) - hit a specific card type across the board
+//       - Targeted-but-mass effects (Bojuka Bog, Tormod's Crypt)
+//         - target one player but remove MANY of their cards
+//     All of these count toward the 6-slot target, but a deck
+//     leaning on the narrower end of the spectrum may want to
+//     run closer to the high end of that count. Prefer at least
+//     2-3 true board wipes among the 6.
+//
+//   Lands - Mana-producing lands in the deck.
+//
+//   Plan - Cards that directly support your deck's primary
+//     strategy and win condition. These define what your deck is
+//     trying to DO. Varies entirely by commander/strategy.
+//
+Ramp: 10
+CardAdvantage: 12
+TargetedDisruption: 12
+MassDisruption: 6
+Lands: 38
+Plan: 30
