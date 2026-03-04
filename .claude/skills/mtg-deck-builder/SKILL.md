@@ -18,6 +18,7 @@ Each deck is a directory containing:
     main.txt          Main deck cards
     sideboard.txt     Sideboard cards
     considering.txt   Cards under consideration
+    primer.md         Deck primer (strategy guide & card rationale)
     batches/          Workspace for batch lookup files
 ```
 
@@ -123,6 +124,12 @@ After the Plan cards are settled, fill in the supporting categories (Ramp, Card 
 2. If a template is in use, run `verify.py check --template` and share the results
 3. Present a summary of the final deck composition and ask if the user wants any swaps
 
+#### Phase 6: Primer
+
+After the deck is finalized and verified, write a `primer.md` file in the deck directory. This is a comprehensive strategy guide that documents the deck's design rationale, how it plays, and why each card was included. See [Primer Format](#primer-format) below for the full structure.
+
+The primer should be written **after** Phase 5 completes, using information gathered throughout the entire build process (the interview answers from Phase 2, strategic axes from Phase 3, card choices from Phase 4, and verification results from Phase 5).
+
 #### Creating the Deck Files
 
 Once the user has confirmed a commander and a deck name (can be decided at any point during the interview):
@@ -137,12 +144,14 @@ Once the user has confirmed a commander and a deck name (can be decided at any p
 2. Confirm the card is commander-legal and within the deck's color identity
 3. Append a line to the appropriate deck file (usually `main.txt`): `1 <Exact Card Name>` with any tags
 4. See `references/moxfield-format.md` for the full line format
+5. Update `primer.md` — add the card to the appropriate role table and note its role. If the card changes strategic interactions or win conditions, update those sections too.
 
 ### Removing Cards
 
 1. Get the file path via `deck.py path "<uuid>" main`
 2. Read the file, find the line containing the card name
 3. Remove that line using the Edit tool
+4. Update `primer.md` — remove the card from its role table. If it was mentioned in synergies, win conditions, or gameplay sections, update or remove those references. If the card is being cut in favor of another, add it to the "Alternatives Considered" section with the reason it was cut.
 
 ### Tagging Cards
 
@@ -219,6 +228,77 @@ Templates define target card counts per category for deck composition. Templates
 5. Use `verify.py check "<uuid>" --template "balanced"` to compare
 
 A user-space template with the same name as a bundled template will take priority. Bundled templates cannot be deleted via `deck.py template delete`.
+
+## Primer Format
+
+The `primer.md` file is a strategy guide written for someone picking up the deck for the first time. It should be detailed, opinionated, and explain *why* cards are in the deck — not just list them. Write it in a confident, analytical tone.
+
+### Required Sections
+
+#### 1. Deck Identity
+A header block with:
+- **Commander:** Full name and stats (cost, power/toughness)
+- **Color Identity:** e.g., Mono-White, Dimir, Temur
+- **Strategy:** One-line deck archetype (e.g., "Group Hug/Slug hybrid with Pillow Fort and ETB value")
+- **Power Level:** Casual / Focused / Optimized / Competitive (with numeric 1-10 if discussed)
+
+Then a paragraph explaining the commander's key ability and how the deck exploits it. Highlight any non-obvious mechanical interactions (e.g., "each turn" meaning each player's turn in multiplayer).
+
+#### 2. Design Constraints
+Summarize the user's requirements from the Phase 2 interview:
+- Required/excluded cards
+- Strategy and playstyle preferences
+- Power level and budget constraints
+- Any restrictions (no stax, no infinites, etc.)
+
+#### 3. Strategic Axes
+The 2-3 strategic axes identified in Phase 3. For each axis:
+- A heading and one-sentence description of the axis
+- **Key cards:** List each card with a bold name and 1-2 sentence explanation of its role and how it connects to the axis. Focus on interactions, not just restating oracle text.
+
+#### 4. Win Conditions
+Numbered list of how the deck actually closes games. Each entry should name specific cards and describe the board state needed to win through that line.
+
+#### 5. Key Synergies & Interactions
+Named combo/synergy packages with explanations. For each:
+- Bold the card names involved
+- Explain what happens when they're combined
+- Note any rules interactions that aren't obvious (e.g., ETB doubler stacking, replacement effects)
+
+#### 6. Card-by-Card Roles
+Group cards by functional role (matching the deck's tag categories where applicable). Use tables with columns: Card | Role. Write the Role column as a concise explanation of what the card does *in this deck*, not generic card evaluation. Include a count in each category heading.
+
+Categories typically include: Token Doublers, Card Advantage, Ramp, Targeted Removal, Protection, Board Wipes, Lands — but adapt to the deck's actual structure and tags.
+
+For lands, explain the mana base philosophy (e.g., Plains-heavy for specific synergies) and call out notable utility lands.
+
+#### 7. How the Game Plays
+Describe the typical game arc in 3 phases:
+- **Early Game (Turns 1-3):** What to deploy first, ideal openers, setup priorities
+- **Mid Game (Turns 4-6):** When the engine comes online, key sequencing
+- **Late Game (Turns 7+):** How you close, what board states you're building toward
+
+Include **Priority plays** for each phase as ordered lists.
+
+#### 8. Alternatives Considered
+Three subsections:
+- **Cards Cut During Construction:** Table of cards that were evaluated and removed, with the reason and what replaced them
+- **Considering Cards Worth Watching:** Table of cards in `considering.txt` with why they're interesting and what they might replace
+- **Cards Deliberately Excluded:** Table of cards that were explicitly rejected with the reason (e.g., against deck constraints, off-theme, owner preference)
+
+#### 9. Deck Statistics
+Summary counts: nonland cards, land sources (broken down), creatures, enchantments, artifacts, instants/sorceries, planeswalkers. Note any cards that serve dual roles (e.g., MDFCs counted as both land and spell).
+
+### Maintaining the Primer
+
+The primer must stay in sync with the actual deck list. When cards are added, removed, or swapped:
+- Update the relevant role table in section 6
+- If the card appears in synergy descriptions (section 5), win conditions (section 4), or gameplay (section 7), update those references
+- When cutting a card, move it to "Cards Cut" in section 8 with the reason
+- When adding a card from the considering list, remove it from "Considering Cards" in section 8
+- Update deck statistics in section 9
+
+Do NOT regenerate the entire primer for small changes — edit the affected sections in place.
 
 ## Critical Rules
 
