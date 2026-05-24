@@ -6,6 +6,11 @@ Validates deck composition against Commander rules and optional templates.
 Usage:
     verify.py check "<uuid>"                        Run all checks
     verify.py check "<uuid>" --template "<name>"    Also compare against template
+
+Flags:
+    --no-cache             Bypass the on-disk card cache for this run
+    --max-age <duration>   Treat cache entries older than this as misses
+                           (e.g. 30d, 12h, 300s)
 """
 
 import json
@@ -17,16 +22,26 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from card_cache import CardCache, parse_duration
+
 DECKS_DIR = Path.home() / ".mtg" / "decks"
 TEMPLATES_DIR = Path.home() / ".mtg" / "templates"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 BASE_URL = "https://api.scryfall.com"
-DELAY_SEC = 0.1
+DELAY_SEC = 0.2  # 200ms between requests (~5 req/s, under Scryfall's <10 req/s limit)
+MAX_RETRIES = 3
+DEFAULT_RETRY_WAIT = 60  # seconds; used when Retry-After header is missing
+MAX_RETRY_WAIT = 90      # cap to keep runs bounded
 HEADERS = {
     "User-Agent": "MTGDeckBuilder/1.0",
     "Accept": "application/json",
 }
+
+CACHE = CardCache(Path.home() / ".mtg" / "cache" / "verify" / "cards")
+_USE_CACHE = True
+_MAX_AGE_SEC = None
+_hit_api = False
 
 BASIC_LANDS = {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
 
@@ -36,14 +51,28 @@ UUID_RE = re.compile(
 
 
 def _request(url):
-    """Make a GET request, returning parsed JSON."""
+    """Make a GET request, returning parsed JSON. Retries on HTTP 429."""
     req = urllib.request.Request(url, headers=HEADERS)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        body = json.loads(e.read().decode())
-        return {"error": body.get("details", e.reason)}
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < MAX_RETRIES:
+                try:
+                    wait = int(e.headers.get("Retry-After", DEFAULT_RETRY_WAIT))
+                except (TypeError, ValueError):
+                    wait = DEFAULT_RETRY_WAIT
+                wait = min(max(wait, 1), MAX_RETRY_WAIT)
+                print(f"Rate limited; waiting {wait}s before retry ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            try:
+                body = json.loads(e.read().decode())
+                detail = body.get("details", e.reason)
+            except (json.JSONDecodeError, ValueError):
+                detail = e.reason
+            return {"error": detail}
 
 
 def _scryfall_search(query):
@@ -56,9 +85,21 @@ def _scryfall_search(query):
 
 
 def _scryfall_exact(name):
-    """Look up a single card by exact name."""
+    """Look up a single card by exact name, consulting the on-disk cache."""
+    global _hit_api
+    if _USE_CACHE:
+        cached = CACHE.get(name, _MAX_AGE_SEC)
+        if cached is not None:
+            return cached
+    # Throttle only between actual API calls; cache hits are free.
+    if _hit_api:
+        time.sleep(DELAY_SEC)
     url = BASE_URL + "/cards/named?" + urllib.parse.urlencode({"exact": name})
-    return _request(url)
+    card = _request(url)
+    _hit_api = True
+    if "error" not in card:
+        CACHE.put(name, card)
+    return card
 
 
 def _require_deck(deck_id):
@@ -160,9 +201,7 @@ def _check_legality(commanders, main):
     not_legal = []
     errors = []
 
-    for i, name in enumerate(unique_names):
-        if i > 0:
-            time.sleep(DELAY_SEC)
+    for name in unique_names:
         card = _scryfall_exact(name)
         if "error" in card:
             errors.append(name)
@@ -208,9 +247,7 @@ def _check_color_identity(commanders, main):
     all_cards = commanders[1:] + main  # skip the commander itself
     unique_names = list(dict.fromkeys(name for _, name, _ in all_cards))
 
-    for i, name in enumerate(unique_names):
-        if i > 0:
-            time.sleep(DELAY_SEC)
+    for name in unique_names:
         card = _scryfall_exact(name)
         if "error" in card:
             continue
@@ -262,10 +299,11 @@ def _check_template(commanders, main, template_name):
     if not targets:
         return "WARN", "Template has no category targets defined"
 
-    # Count cards per tag category
+    # Count cards per tag category (weighted by quantity so e.g.
+    # "25 Swamp #!Land" contributes 25 to Land, not 1).
     all_cards = commanders + main
     tag_counts = {}
-    for _, _, tags in all_cards:
+    for qty, _, tags in all_cards:
         for tag in tags:
             # Strip # or #! prefix
             if tag.startswith("#!"):
@@ -274,7 +312,7 @@ def _check_template(commanders, main, template_name):
                 cat = tag[1:]
             else:
                 continue
-            tag_counts[cat] = tag_counts.get(cat, 0) + 1
+            tag_counts[cat] = tag_counts.get(cat, 0) + qty
 
     # Build comparison table
     lines = [f"{'Category':<20} {'Target':<12} {'Actual':>8}  Status"]
@@ -355,7 +393,39 @@ def cmd_check(deck_id, template_name=None):
         print()
 
 
+def _extract_value(name):
+    if name in sys.argv:
+        idx = sys.argv.index(name)
+        if idx + 1 < len(sys.argv):
+            val = sys.argv[idx + 1]
+            del sys.argv[idx:idx + 2]
+            return val
+        print(f"Error: {name} requires a value", file=sys.stderr)
+        sys.exit(1)
+    return None
+
+
+def _extract_flag(name):
+    if name in sys.argv:
+        sys.argv.remove(name)
+        return True
+    return False
+
+
 def main():
+    global _USE_CACHE, _MAX_AGE_SEC
+
+    if _extract_flag("--no-cache"):
+        _USE_CACHE = False
+    max_age_raw = _extract_value("--max-age")
+    if max_age_raw is not None:
+        try:
+            _MAX_AGE_SEC = parse_duration(max_age_raw)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+    template_name = _extract_value("--template")
+
     if len(sys.argv) < 3:
         print(__doc__.strip())
         sys.exit(1)
@@ -366,17 +436,6 @@ def main():
         sys.exit(1)
 
     deck_id = sys.argv[2]
-    template_name = None
-
-    # Parse --template flag
-    if "--template" in sys.argv:
-        idx = sys.argv.index("--template")
-        if idx + 1 < len(sys.argv):
-            template_name = sys.argv[idx + 1]
-        else:
-            print("Error: --template requires a name argument", file=sys.stderr)
-            sys.exit(1)
-
     cmd_check(deck_id, template_name)
 
 

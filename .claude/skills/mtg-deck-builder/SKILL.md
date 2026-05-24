@@ -30,6 +30,8 @@ All scripts are in this skill's `scripts/` directory. Use full paths when invoki
 SKILL_DIR="<this skill's base directory>"
 
 # Card lookup (functional data only)
+# Results are transparently cached to disk to avoid re-hitting Scryfall and
+# triggering rate limits — just call these normally and the cache does its job.
 python3 "$SKILL_DIR/scripts/scryfall.py" search "counter spell"   # fuzzy name search
 python3 "$SKILL_DIR/scripts/scryfall.py" exact "Counterspell"     # exact name lookup
 python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt          # bulk lookup from file
@@ -55,6 +57,8 @@ python3 "$SKILL_DIR/scripts/deck.py" template delete "balanced"
 python3 "$SKILL_DIR/scripts/verify.py" check "<uuid>"
 python3 "$SKILL_DIR/scripts/verify.py" check "<uuid>" --template "balanced"
 ```
+
+> Cache maintenance (rarely needed): `scryfall.py cache stats | clear | evict --name <card> | evict --older-than <30d>`. Pass `--no-cache` or `--max-age <duration>` to any lookup if you suspect stale data.
 
 ## Scryfall Query Syntax
 
