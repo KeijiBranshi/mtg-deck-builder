@@ -27,7 +27,10 @@
 //   TargetedDisruption - Cards that answer a single specific
 //     threat: spot removal (Swords to Plowshares), counterspells
 //     (Counterspell), targeted exile (Anguished Unmaking),
-//     targeted discard, and single-permanent bounce.
+//     targeted discard, single-permanent bounce, and
+//     single-target -X/-X effects (Vilis's activated ability,
+//     Disfigure). If an effect hits multiple targets at once,
+//     it belongs in MassDisruption instead.
 //
 //   MassDisruption - Cards that affect multiple permanents,
 //     cards, or resources at once. This is a spectrum:
@@ -44,7 +47,7 @@
 //     run closer to the high end of that count. Prefer at least
 //     2-3 true board wipes among the 6.
 //
-//   Lands - Mana-producing lands in the deck.
+//   Land - Mana-producing lands in the deck.
 //
 //   Plan - Cards that directly support your deck's primary
 //     strategy and win condition. These define what your deck is
@@ -54,5 +57,5 @@ Ramp: 10
 CardAdvantage: 12
 TargetedDisruption: 12
 MassDisruption: 6
-Lands: 38
+Land: 38
 Plan: 30

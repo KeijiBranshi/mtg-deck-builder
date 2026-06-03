@@ -6,6 +6,17 @@ Usage:
     scryfall.py exact "<name>"      Exact name lookup
     scryfall.py batch "<file>"      Bulk lookup from file (one card name per line)
     scryfall.py query "<query>"     Advanced search using Scryfall syntax
+    scryfall.py cache <op> [...]    Manage the on-disk card cache
+
+Cache subcommands:
+    scryfall.py cache stats
+    scryfall.py cache clear
+    scryfall.py cache evict --name "<card>"
+    scryfall.py cache evict --older-than <duration>   e.g. 30d, 12h, 300s
+
+Global flags (apply to search/exact/batch/query):
+    --no-cache             Bypass the on-disk cache for this invocation
+    --max-age <duration>   Treat cache entries older than this as misses
 
 Query examples:
     scryfall.py query "t:creature o:draw cmc<=3"
@@ -27,29 +38,52 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+from card_cache import CardCache, parse_duration
 
 BASE_URL = "https://api.scryfall.com"
-DELAY_SEC = 0.1  # 100ms between requests per Scryfall policy
+DELAY_SEC = 0.2  # 200ms between requests (~5 req/s, under Scryfall's <10 req/s limit)
+MAX_RETRIES = 3
+DEFAULT_RETRY_WAIT = 60  # seconds; used when Retry-After header is missing
+MAX_RETRY_WAIT = 90      # cap to keep runs bounded
 HEADERS = {
     "User-Agent": "MTGDeckBuilder/1.0",
     "Accept": "application/json",
 }
 
+CACHE = CardCache(Path.home() / ".mtg" / "cache" / "scryfall" / "cards")
+
 
 def _request(path, params=None):
-    """Make a GET request to the Scryfall API."""
+    """Make a GET request to the Scryfall API, retrying on 429."""
     url = BASE_URL + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers=HEADERS)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        body = json.loads(e.read().decode())
-        detail = body.get("details", e.reason)
-        print(f"Error: {detail}", file=sys.stderr)
-        sys.exit(1)
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < MAX_RETRIES:
+                try:
+                    wait = int(e.headers.get("Retry-After", DEFAULT_RETRY_WAIT))
+                except (TypeError, ValueError):
+                    wait = DEFAULT_RETRY_WAIT
+                wait = min(max(wait, 1), MAX_RETRY_WAIT)
+                print(f"Rate limited; waiting {wait}s before retry ({attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            try:
+                body = json.loads(e.read().decode())
+                detail = body.get("details", e.reason)
+            except (json.JSONDecodeError, ValueError):
+                detail = e.reason
+            print(f"Error: {detail}", file=sys.stderr)
+            sys.exit(1)
 
 
 def _format_card(card):
@@ -102,15 +136,34 @@ def _format_card(card):
     return "\n".join(lines)
 
 
-def cmd_search(name):
-    """Fuzzy name search."""
+def _lookup_exact(name, use_cache=True, max_age_sec=None):
+    """Look up a card by exact name, consulting the cache when allowed."""
+    if use_cache:
+        cached = CACHE.get(name, max_age_sec)
+        if cached is not None:
+            return cached, True
+    card = _request("/cards/named", {"exact": name})
+    CACHE.put(name, card)
+    return card, False
+
+
+def cmd_search(name, use_cache=True, max_age_sec=None):
+    """Fuzzy name search. Caches the resolved card under its canonical name."""
+    # Fuzzy input rarely matches the cache key; check anyway in case the user
+    # passed the canonical name.
+    if use_cache:
+        cached = CACHE.get(name, max_age_sec)
+        if cached is not None:
+            print(_format_card(cached))
+            return
     card = _request("/cards/named", {"fuzzy": name})
+    CACHE.put(name, card)
     print(_format_card(card))
 
 
-def cmd_exact(name):
+def cmd_exact(name, use_cache=True, max_age_sec=None):
     """Exact name lookup."""
-    card = _request("/cards/named", {"exact": name})
+    card, _ = _lookup_exact(name, use_cache=use_cache, max_age_sec=max_age_sec)
     print(_format_card(card))
 
 
@@ -136,7 +189,7 @@ def cmd_query(query):
         try:
             with urllib.request.urlopen(req) as resp:
                 data = json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
+        except urllib.error.HTTPError:
             break
         all_cards.extend(data.get("data", []))
         pages_fetched += 1
@@ -156,7 +209,7 @@ def cmd_query(query):
         print(f"{card_name:<35} {type_line:<30} {card.get('cmc', 0):>4.0f} {colors:<12}")
 
 
-def cmd_batch(filepath):
+def cmd_batch(filepath, use_cache=True, max_age_sec=None):
     """Bulk lookup from a file of card names (one per line).
 
     Outputs a compact summary table for deck analysis.
@@ -168,29 +221,30 @@ def cmd_batch(filepath):
         print(f"Error: File not found: {filepath}", file=sys.stderr)
         sys.exit(1)
 
-    # Print header
     print(f"{'Name':<35} {'Type':<30} {'CMC':>4} {'Colors':<12}")
     print("-" * 85)
 
     errors = []
-    for i, name in enumerate(names):
-        if i > 0:
-            time.sleep(DELAY_SEC)
+    hit_api = False
+    for name in names:
         try:
-            card = _request("/cards/named", {"exact": name})
-            colors = ", ".join(card.get("colors", [])) or "C"
-            type_line = card.get("type_line", "N/A")
-            # Truncate long type lines
-            if len(type_line) > 28:
-                type_line = type_line[:27] + "…"
-            card_name = card["name"]
-            if len(card_name) > 33:
-                card_name = card_name[:32] + "…"
-            print(f"{card_name:<35} {type_line:<30} {card.get('cmc', 0):>4.0f} {colors:<12}")
+            card, was_cached = _lookup_exact(name, use_cache=use_cache, max_age_sec=max_age_sec)
         except SystemExit:
             errors.append(name)
-            # Reset so we don't actually exit
             continue
+        if not was_cached:
+            # Throttle only between actual API calls; cache hits are free.
+            if hit_api:
+                time.sleep(DELAY_SEC)
+            hit_api = True
+        colors = ", ".join(card.get("colors", [])) or "C"
+        type_line = card.get("type_line", "N/A")
+        if len(type_line) > 28:
+            type_line = type_line[:27] + "…"
+        card_name = card["name"]
+        if len(card_name) > 33:
+            card_name = card_name[:32] + "…"
+        print(f"{card_name:<35} {type_line:<30} {card.get('cmc', 0):>4.0f} {colors:<12}")
 
     if errors:
         print(f"\nFailed to look up {len(errors)} card(s):")
@@ -198,20 +252,112 @@ def cmd_batch(filepath):
             print(f"  - {name}")
 
 
+def _format_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _format_ts(ts):
+    if ts is None:
+        return "—"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def cmd_cache(args):
+    """Cache management."""
+    if not args:
+        print("Usage: scryfall.py cache <stats|clear|evict ...>", file=sys.stderr)
+        sys.exit(1)
+
+    sub = args[0]
+    rest = args[1:]
+
+    if sub == "stats":
+        s = CACHE.stats()
+        print(f"Location:     {CACHE.cache_dir}")
+        print(f"Entries:      {s['count']}")
+        print(f"Total size:   {_format_size(s['bytes'])}")
+        print(f"Oldest entry: {_format_ts(s['oldest'])}")
+        print(f"Newest entry: {_format_ts(s['newest'])}")
+        return
+
+    if sub == "clear":
+        n = CACHE.clear()
+        print(f"Cleared {n} cached card(s) from {CACHE.cache_dir}")
+        return
+
+    if sub == "evict":
+        if rest and rest[0] == "--name" and len(rest) >= 2:
+            if CACHE.evict_name(rest[1]):
+                print(f"Evicted: {rest[1]}")
+            else:
+                print(f"Not in cache: {rest[1]}")
+            return
+        if rest and rest[0] == "--older-than" and len(rest) >= 2:
+            try:
+                age = parse_duration(rest[1])
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            n = CACHE.evict_older_than(age)
+            print(f"Evicted {n} entries older than {rest[1]}")
+            return
+        print("Usage: scryfall.py cache evict (--name <card> | --older-than <duration>)", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Unknown cache subcommand: {sub}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _extract_flag(name):
+    if name in sys.argv:
+        sys.argv.remove(name)
+        return True
+    return False
+
+
+def _extract_value(name):
+    if name in sys.argv:
+        idx = sys.argv.index(name)
+        if idx + 1 < len(sys.argv):
+            val = sys.argv[idx + 1]
+            del sys.argv[idx:idx + 2]
+            return val
+        print(f"Error: {name} requires a value", file=sys.stderr)
+        sys.exit(1)
+    return None
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
         sys.exit(1)
 
+    no_cache = _extract_flag("--no-cache")
+    max_age_raw = _extract_value("--max-age")
+    max_age_sec = None
+    if max_age_raw is not None:
+        try:
+            max_age_sec = parse_duration(max_age_raw)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+    use_cache = not no_cache
+
     cmd = sys.argv[1]
     if cmd == "search" and len(sys.argv) == 3:
-        cmd_search(sys.argv[2])
+        cmd_search(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec)
     elif cmd == "exact" and len(sys.argv) == 3:
-        cmd_exact(sys.argv[2])
+        cmd_exact(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec)
     elif cmd == "batch" and len(sys.argv) == 3:
-        cmd_batch(sys.argv[2])
+        cmd_batch(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec)
     elif cmd == "query" and len(sys.argv) == 3:
         cmd_query(sys.argv[2])
+    elif cmd == "cache":
+        cmd_cache(sys.argv[2:])
     else:
         print(__doc__.strip())
         sys.exit(1)
