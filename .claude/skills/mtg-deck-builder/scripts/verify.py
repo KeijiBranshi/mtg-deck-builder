@@ -23,6 +23,7 @@ import urllib.request
 from pathlib import Path
 
 from card_cache import CardCache, parse_duration
+from template import get_tags, parse_template
 
 DECKS_DIR = Path.home() / ".mtg" / "decks"
 TEMPLATES_DIR = Path.home() / ".mtg" / "templates"
@@ -283,18 +284,13 @@ def _check_template(commanders, main, template_name):
     if template_path is None:
         return "WARN", f"Template not found: {template_name}"
 
-    # Parse template targets
-    targets = {}
-    for line in template_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("//"):
-            continue
-        match = re.match(r"^(.+?):\s*(\d+)(?:\s*-\s*(\d+))?$", line)
-        if match:
-            category = match.group(1).strip()
-            low = int(match.group(2))
-            high = int(match.group(3)) if match.group(3) else low
-            targets[category] = (low, high)
+    # Parse template; keep only tags that have explicit count targets.
+    parsed = parse_template(template_path)
+    targets = {
+        name: entry["count"]
+        for name, entry in get_tags(parsed).items()
+        if entry["count"] is not None
+    }
 
     if not targets:
         return "WARN", "Template has no category targets defined"

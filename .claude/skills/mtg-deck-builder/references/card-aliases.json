@@ -1,0 +1,8 @@
+{
+  "_comment": "Map user-known card names to their canonical Scryfall name. Use this when a card has a non-Scryfall printed name (e.g., Universes Beyond / Final Fantasy variants that share oracle text with an existing card) and Scryfall's fuzzy lookup substitutes incorrectly. When resolving a card name, check this map first; if a match is found, look up the canonical name instead. Keys are case-sensitive as the user types them; values are the exact Scryfall name.",
+  "aliases": {
+    "Cordyceps Excision": "Cabal Ritual",
+    "Ellie's Rage": "Dictate of Erebos",
+    "Shantotto's Coercion": "Diabolic Intent"
+  }
+}

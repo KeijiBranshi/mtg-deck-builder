@@ -34,7 +34,9 @@ SKILL_DIR="<this skill's base directory>"
 # triggering rate limits — just call these normally and the cache does its job.
 python3 "$SKILL_DIR/scripts/scryfall.py" search "counter spell"   # fuzzy name search
 python3 "$SKILL_DIR/scripts/scryfall.py" exact "Counterspell"     # exact name lookup
-python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt          # bulk lookup from file
+python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt          # bulk lookup from file (compact table)
+python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt --verbose # bulk lookup with full oracle text (for tagging/categorization)
+python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt --suggest-tags --template command-zone-template  # heuristic tag suggestions
 python3 "$SKILL_DIR/scripts/scryfall.py" query "t:creature o:draw cmc<=3"  # advanced search
 
 # Deck management
@@ -159,12 +161,12 @@ Once the user has confirmed a commander and a deck name (can be decided at any p
 
 ### Tagging Cards
 
-- **Global tags** (collection-wide): `#TagName`
-- **Local tags** (deck-specific): `#!TagName`
+- **Local tags** (deck-specific): `#TagName`
+- **Global tags** (collection-wide): `#!TagName`
 - To add/remove tags, find the card's line in the deck file and edit it
 - Tags go at the end of the line, space-separated
 
-Example: `1 Sol Ring #Ramp #!ArtifactSynergy`
+Example: `1 Sol Ring #!Ramp #ArtifactSynergy`
 
 ### Batch Card Lookup
 
@@ -204,34 +206,76 @@ python3 "$SKILL_DIR/scripts/verify.py" check "<uuid>" --template "balanced"
 
 ### Using Templates
 
-Templates define target card counts per category for deck composition. Templates are resolved from two locations (user-space takes priority):
+Templates define a deck's **tag vocabulary** with optional count targets per tag. Each tag may carry a description explaining what kind of card belongs in that category. Templates are resolved from two locations (user-space takes priority):
 
 1. **User-space** (`~/.mtg/templates/`) — personal templates created via `deck.py template create`
 2. **Bundled** (`assets/` in this skill's directory) — pre-packaged templates shipped with the skill
 
 #### Bundled Templates
 
-- **command-zone-template** — Based on the Command Zone's deck building methodology (10 Ramp, 12 CardAdvantage, 12 TargetedDisruption, 6 MassDisruption, 38 Lands, 30 Plan)
+- **command-zone-template** — Based on the Command Zone's deck building methodology (10 Ramp, 12 CardAdvantage, 12 TargetedDisruption, 6 MassDisruption, 38 Lands, plus an open-ended Plan category)
+
+#### Template Format
+
+Each tag block is a header (`TagName: count` or `TagName:` for no count target) followed by an optional indented description that runs until a blank line. Counts may be a single number (`10`) or a range (`10-15`). Lines starting with `//` are comments.
+
+```
+// Template: Balanced Commander
+// Description: Standard balanced 100-card Commander deck
+
+Ramp: 10-15
+  Cards that accelerate mana production beyond the natural cadence.
+  Includes mana rocks, dorks, ritual spells, and cost reducers.
+
+CardAdvantage: 10
+  Net-positive card draw or selection.
+
+Plan:
+  Strategy cards specific to the deck's win condition. No fixed count;
+  fill remaining non-land slots here.
+```
 
 #### Creating Custom Templates
 
-1. Create a template: `deck.py template create "Balanced Commander"`
-2. Get its path: `deck.py template path "balanced"`
-3. Edit the template file to add category targets:
-   ```
-   // Template: Balanced Commander
-   // Description: Standard balanced 100-card Commander deck
-   Lands: 38
-   Ramp: 10-15
-   Card Draw: 10
-   Board Wipes: 3-5
-   Targeted Removal: 8-10
-   Creatures: 25-30
-   ```
-4. Tag categories correspond to tags in deck files (e.g., `Ramp` matches `#Ramp` or `#!Ramp`)
-5. Use `verify.py check "<uuid>" --template "balanced"` to compare
+1. `deck.py template create "Balanced Commander"`
+2. `deck.py template path "balanced"` to get the file path
+3. Edit using the format above
+4. Tag headers correspond to tags used in deck files (e.g., `Ramp` matches `#Ramp`)
+5. `verify.py check "<uuid>" --template "balanced"` compares the deck against the counts; tags without counts are ignored by the verifier but still part of the vocabulary
 
-A user-space template with the same name as a bundled template will take priority. Bundled templates cannot be deleted via `deck.py template delete`.
+A user-space template with the same name as a bundled template takes priority. Bundled templates cannot be deleted via `deck.py template delete`.
+
+### Per-Deck Tag Definitions
+
+A deck may carry its own tag descriptions in an optional `tags.md` file alongside `main.txt`. This is the place to document deck-specific tags (e.g., `#WinCon`, custom flavor categories) that don't belong in a shared template. Format is plain markdown with one `## TagName` heading per tag:
+
+```markdown
+## WinCon
+Cards that close the game in this deck: Aetherflux Reservoir, Exsanguinate, Gray Merchant.
+
+## Drain
+Effects where an opponent loses life and you gain it.
+```
+
+`scryfall.py batch --suggest-tags --deck <uuid>` reads this file to expand the suggestion vocabulary.
+
+### Auto-Tag Suggestions
+
+When tagging cards, you can ask `scryfall.py batch` to suggest tags based on heuristic oracle-text matching:
+
+```bash
+python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt --suggest-tags
+python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt --suggest-tags --template "command-zone-template"
+python3 "$SKILL_DIR/scripts/scryfall.py" batch cards.txt --suggest-tags --template "command-zone-template" --deck "<uuid>"
+```
+
+- Without `--template`, all known heuristic tags are emitted (Land, ManaSource, Ramp, CardAdvantage, Tutor, Tokens, TargetedDisruption, MassDisruption, LifeGain, Drain, SacOutlet, DeathTrigger, Protection, Punish).
+- With `--template`, suggestions are restricted to that template's vocabulary.
+- With `--deck`, the deck's `tags.md` headings are added to the vocabulary.
+
+Suggestions are heuristics — always review the oracle text before applying. Tags requiring deck-specific judgment (`#WinCon`, `#Plan`, custom flavor tags) are never auto-suggested.
+
+When **starting a new deck**, ask the user whether they want auto-tag suggestions as cards are added. If yes, run `scryfall.py exact` (or `batch`) with `--suggest-tags` before committing each card so you can review and refine the suggestions interactively.
 
 ## Primer Format
 
@@ -307,7 +351,7 @@ Do NOT regenerate the entire primer for small changes — edit the affected sect
 ## Critical Rules
 
 1. **ALWAYS use Scryfall for card data.** NEVER rely on model knowledge for card names, oracle text, mana costs, types, or any card attributes. Run `scryfall.py` before making any claims about a card.
-2. **Use exact card names.** Always use the name as returned by Scryfall (correct capitalization, punctuation, split card formatting with `//`).
+2. **Use exact card names.** Always use the name as returned by Scryfall (correct capitalization, punctuation, split card formatting with `//`). When a user-supplied name isn't a real Scryfall card (e.g., a Universes Beyond / reskin printing that shares oracle text with an existing card), check `references/card-aliases.json` for a canonical mapping before relying on Scryfall's fuzzy lookup — fuzzy matches often substitute the wrong card silently. Record any new aliases you discover in that file.
 3. **Commander singleton rule.** Maximum 1 copy of each card except basic lands. 100 cards total including the commander.
 4. **Color identity.** All cards must fit within the commander's color identity. Check `Color Identity` from Scryfall output against the commander's.
 5. **Deck directory is source of truth.** The deck directory and its files are the canonical deck list. Always read them before making edits.

@@ -1,61 +1,45 @@
 // Template: Command Zone Template
-// Description: Based on the Command Zone's deck building template.
-//   Cards can belong to multiple categories, so slot totals (108)
-//   exceed the 100-card deck size. When tagging cards, apply all
-//   categories that fit -- e.g. Rishkar's Expertise is both
-//   #Ramp and #CardAdvantage.
-//
-// Category Definitions (Command Zone):
-//
-//   Ramp - Cards that accelerate your mana production ahead of
-//     curve: mana rocks (Sol Ring), mana dorks (Llanowar Elves),
-//     land ramp spells (Cultivate), cost reducers, and rituals.
-//
-//   CardAdvantage - Cards that generate net card advantage or
-//     meaningful card selection. This includes:
-//       - Hard draw (Rhystic Study, Harmonize)
-//       - Repeatable draw engines (Phyrexian Arena)
-//       - Impulse/exile draw (Light Up the Stage)
-//       - Tutors and recursion engines
-//       - Token generators that replace themselves
-//       - Scry and surveil effects that improve card quality
-//     Note: Pure draw is the strongest form, but scry/surveil
-//     still count as card advantage since they reduce the number
-//     of dead draws. Weight draw effects more heavily when
-//     evaluating whether the deck has enough in this category.
-//
-//   TargetedDisruption - Cards that answer a single specific
-//     threat: spot removal (Swords to Plowshares), counterspells
-//     (Counterspell), targeted exile (Anguished Unmaking),
-//     targeted discard, single-permanent bounce, and
-//     single-target -X/-X effects (Vilis's activated ability,
-//     Disfigure). If an effect hits multiple targets at once,
-//     it belongs in MassDisruption instead.
-//
-//   MassDisruption - Cards that affect multiple permanents,
-//     cards, or resources at once. This is a spectrum:
-//       - Full board wipes (Wrath of God, Farewell) - broadest
-//         blast radius, affect all players and/or all card types
-//       - Asymmetric wipes (Cyclonic Rift, Plague Wind) - hit
-//         opponents but spare you
-//       - Narrow mass removal (Vandalblast overloaded, mass
-//         -X/-X) - hit a specific card type across the board
-//       - Targeted-but-mass effects (Bojuka Bog, Tormod's Crypt)
-//         - target one player but remove MANY of their cards
-//     All of these count toward the 6-slot target, but a deck
-//     leaning on the narrower end of the spectrum may want to
-//     run closer to the high end of that count. Prefer at least
-//     2-3 true board wipes among the 6.
-//
-//   Land - Mana-producing lands in the deck.
-//
-//   Plan - Cards that directly support your deck's primary
-//     strategy and win condition. These define what your deck is
-//     trying to DO. Varies entirely by commander/strategy.
-//
+// Description: Based on the Command Zone's deck building methodology. Cards can belong to multiple categories, so slot totals (108) exceed the 100-card deck size. When tagging a card, apply all categories that fit -- e.g. Rishkar's Expertise is both #Ramp and #CardAdvantage.
+
 Ramp: 10
+  Cards that accelerate mana production ahead of curve: mana rocks (Sol Ring),
+  mana dorks (Llanowar Elves), land ramp spells (Cultivate), cost reducers,
+  and rituals.
+
 CardAdvantage: 12
+  Cards that generate net card advantage or meaningful card selection.
+  Includes hard draw (Rhystic Study, Harmonize), repeatable draw engines
+  (Phyrexian Arena), impulse/exile draw (Light Up the Stage), tutors and
+  recursion engines, token generators that replace themselves, and scry/
+  surveil effects that improve card quality. Pure draw is the strongest
+  form, but scry/surveil still count since they reduce dead draws. Weight
+  draw effects more heavily when evaluating whether this category is full.
+
 TargetedDisruption: 12
+  Cards that answer a single specific threat: spot removal (Swords to
+  Plowshares), counterspells (Counterspell), targeted exile (Anguished
+  Unmaking), targeted discard, single-permanent bounce, edicts, stun
+  counters, and single-target -X/-X effects (Vilis's activated ability,
+  Disfigure). If an effect hits multiple targets at once, it belongs in
+  MassDisruption instead.
+
 MassDisruption: 6
+  Cards that affect multiple permanents, cards, or resources at once.
+  This is a spectrum: full board wipes (Wrath of God, Farewell) have the
+  broadest blast radius; asymmetric wipes (Cyclonic Rift, Plague Wind)
+  hit opponents but spare you; narrow mass removal (Vandalblast
+  overloaded, mass -X/-X) hits a specific card type across the board;
+  targeted-but-mass effects (Bojuka Bog, Tormod's Crypt) target one
+  player but remove MANY of their cards. All count toward the 6-slot
+  target, but a deck leaning narrow may want to run closer to the high
+  end. Prefer at least 2-3 true board wipes among the 6.
+
 Land: 38
-Plan: 30
+  Mana-producing lands in the deck.
+
+Plan:
+  Cards that directly support your deck's primary strategy and win
+  condition. These define what your deck is trying to DO. Varies
+  entirely by commander/strategy, so no fixed count target -- treat
+  this category as the budget for strategy-specific cards after the
+  other categories are filled.
