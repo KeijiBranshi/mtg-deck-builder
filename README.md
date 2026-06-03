@@ -20,9 +20,12 @@ Then ask Claude to help you build a deck:
 ## What It Does
 
 - Creates and manages deck lists stored under `~/.mtg/decks/`
-- Looks up card data via the Scryfall API (names, types, mana costs, legality, color identity)
+- Looks up card data via the Scryfall API (names, types, mana costs, legality, color identity), with on-disk caching to avoid rate limits
+- Resolves user-known aliases for reskinned cards (e.g., Universes Beyond printings that share oracle text with an existing card)
 - Verifies decks against Commander rules (100-card singleton, color identity, ban list)
-- Supports deck composition templates (e.g., the Command Zone methodology)
+- Supports deck composition **templates** that define a tag vocabulary with optional count targets and descriptions
+- Suggests tags for cards based on heuristic oracle-text matching (`--suggest-tags`)
+- Generates a `primer.md` strategy guide once a deck is finalized
 - Outputs Moxfield-compatible text files you can import directly
 
 ## Deck Structure
@@ -36,6 +39,9 @@ Each deck is a directory of plain text files:
     main.txt          Main deck cards
     sideboard.txt     Sideboard cards
     considering.txt   Cards under consideration
+    primer.md         Strategy guide (written after the deck is finalized)
+    tags.md           Optional: deck-specific tag definitions
+    batches/          Workspace for bulk lookup files
 ```
 
-Card lines follow the Moxfield format: `1 Card Name #Tag1 #Tag2`
+Card lines follow the Moxfield format: `1 Card Name #Tag1 #Tag2`. Tags prefixed with `#` are local to the deck; `#!` tags are global across the user's Moxfield collection.
