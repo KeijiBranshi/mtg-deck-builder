@@ -18,10 +18,22 @@ Global flags (apply to search/exact/batch/query):
     --no-cache             Bypass the on-disk cache for this invocation
     --max-age <duration>   Treat cache entries older than this as misses
 
+Query-only flags:
+    --max-pages N          Page cap (default 3, 0 = unlimited until has_more is false)
+
+Batch/query flags:
+    --verbose              Print full oracle text per card instead of the compact table
+
+Tag-suggestion flags (apply to exact and batch):
+    --suggest-tags         Emit a heuristic `Suggested tags:` line per card
+    --template <name>      Restrict tag suggestions to this template's vocabulary
+    --deck <uuid>          Augment vocabulary with the deck's tags.md (if present)
+
 Query examples:
     scryfall.py query "t:creature o:draw cmc<=3"
     scryfall.py query "t:instant id:dimir o:counter"
     scryfall.py query "t:land id:gruul"
+    scryfall.py query "id:b is:commander_legal o:'lose ~ life'" --max-pages 0 --verbose
 
 Common Scryfall search syntax:
     o:text       oracle text contains "text"
@@ -33,6 +45,7 @@ Common Scryfall search syntax:
 """
 
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -54,6 +67,33 @@ HEADERS = {
 }
 
 CACHE = CardCache(Path.home() / ".mtg" / "cache" / "scryfall" / "cards")
+
+ALIASES_PATH = Path(__file__).resolve().parent.parent / "references" / "card-aliases.json"
+
+
+def _load_aliases():
+    """Load the card name alias map. Returns {} if the file is missing or malformed."""
+    try:
+        data = json.loads(ALIASES_PATH.read_text())
+        return data.get("aliases", {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+ALIASES = _load_aliases()
+
+
+def _resolve_alias(name):
+    """Map a user-supplied name to its canonical Scryfall name if aliased.
+
+    Prints a notice to stderr when an alias is applied so the user sees the
+    substitution rather than wondering why the wrong card came back.
+    """
+    canonical = ALIASES.get(name)
+    if canonical and canonical != name:
+        print(f"[alias] {name!r} → {canonical!r}", file=sys.stderr)
+        return canonical
+    return name
 
 
 def _request(path, params=None):
@@ -138,6 +178,7 @@ def _format_card(card):
 
 def _lookup_exact(name, use_cache=True, max_age_sec=None):
     """Look up a card by exact name, consulting the cache when allowed."""
+    name = _resolve_alias(name)
     if use_cache:
         cached = CACHE.get(name, max_age_sec)
         if cached is not None:
@@ -149,6 +190,7 @@ def _lookup_exact(name, use_cache=True, max_age_sec=None):
 
 def cmd_search(name, use_cache=True, max_age_sec=None):
     """Fuzzy name search. Caches the resolved card under its canonical name."""
+    name = _resolve_alias(name)
     # Fuzzy input rarely matches the cache key; check anyway in case the user
     # passed the canonical name.
     if use_cache:
@@ -161,19 +203,31 @@ def cmd_search(name, use_cache=True, max_age_sec=None):
     print(_format_card(card))
 
 
-def cmd_exact(name, use_cache=True, max_age_sec=None):
-    """Exact name lookup."""
+def cmd_exact(name, use_cache=True, max_age_sec=None,
+              suggest_tags=False, template_name=None, deck_id=None):
+    """Exact name lookup. Optionally appends a `Suggested tags:` line."""
     card, _ = _lookup_exact(name, use_cache=use_cache, max_age_sec=max_age_sec)
     print(_format_card(card))
+    if suggest_tags:
+        from tag_suggest import suggest_tags as _suggest
+
+        template_vocab, _parsed = _load_template_vocabulary(template_name)
+        deck_vocab = _load_deck_tags(deck_id)
+        vocabulary = None
+        if template_vocab is not None or deck_vocab:
+            vocabulary = (template_vocab or set()) | deck_vocab
+        tags = _suggest(card, vocabulary=vocabulary)
+        tag_str = " ".join(f"#{t}" for t in tags) if tags else "(none)"
+        print(f"Suggested tags: {tag_str}")
 
 
-def cmd_query(query):
+def cmd_query(query, max_pages=3, verbose=False):
     """Advanced search using Scryfall's full search syntax.
 
-    Uses the /cards/search endpoint. Fetches up to 3 pages (225 cards max).
-    Outputs a compact summary table.
+    Uses the /cards/search endpoint. By default fetches up to 3 pages (~525 cards).
+    Pass max_pages=0 for unlimited paging. Pass verbose=True to print full oracle
+    text per card instead of the compact summary table.
     """
-    MAX_PAGES = 3
     all_cards = []
     total_cards = 0
 
@@ -182,7 +236,7 @@ def cmd_query(query):
     all_cards.extend(data.get("data", []))
 
     pages_fetched = 1
-    while data.get("has_more") and pages_fetched < MAX_PAGES:
+    while data.get("has_more") and (max_pages == 0 or pages_fetched < max_pages):
         time.sleep(DELAY_SEC)
         next_url = data["next_page"]
         req = urllib.request.Request(next_url, headers=HEADERS)
@@ -194,7 +248,16 @@ def cmd_query(query):
         all_cards.extend(data.get("data", []))
         pages_fetched += 1
 
-    print(f"Found {total_cards} cards (showing {len(all_cards)}):\n")
+    print(f"Found {total_cards} cards (showing {len(all_cards)} across {pages_fetched} page(s)):\n")
+
+    if verbose:
+        for card in all_cards:
+            # Reuse the single-card formatter; cache so later exact lookups are free.
+            CACHE.put(card["name"], card)
+            print(_format_card(card))
+            print()
+        return
+
     print(f"{'Name':<35} {'Type':<30} {'CMC':>4} {'Colors':<12}")
     print("-" * 85)
 
@@ -209,10 +272,51 @@ def cmd_query(query):
         print(f"{card_name:<35} {type_line:<30} {card.get('cmc', 0):>4.0f} {colors:<12}")
 
 
-def cmd_batch(filepath, use_cache=True, max_age_sec=None):
+def _load_template_vocabulary(template_name):
+    """Resolve a template by name and return (vocabulary_set, parsed) or (None, None)."""
+    if not template_name:
+        return None, None
+    # Import locally to avoid pulling deck.py if --template isn't used.
+    from template import get_tags, parse_template
+
+    user_dir = Path.home() / ".mtg" / "templates"
+    assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in template_name.lower()).strip("-")
+    for d in (user_dir, assets_dir):
+        candidate = d / f"{safe}.txt"
+        if candidate.exists():
+            parsed = parse_template(candidate)
+            return set(get_tags(parsed).keys()), parsed
+    print(f"[warn] Template not found: {template_name}", file=sys.stderr)
+    return None, None
+
+
+def _load_deck_tags(deck_id):
+    """Read tag names from a deck-local tags.md if present. Returns set of names."""
+    if not deck_id:
+        return set()
+    path = Path.home() / ".mtg" / "decks" / deck_id / "tags.md"
+    if not path.exists():
+        return set()
+    names = set()
+    for line in path.read_text().splitlines():
+        m = re.match(r"^\s*##\s+([A-Za-z][A-Za-z0-9_]*)\s*$", line)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def cmd_batch(filepath, use_cache=True, max_age_sec=None, verbose=False,
+              suggest_tags=False, template_name=None, deck_id=None):
     """Bulk lookup from a file of card names (one per line).
 
-    Outputs a compact summary table for deck analysis.
+    Outputs a compact summary table for deck analysis, or full oracle text per
+    card when verbose=True (useful for bulk tagging or category analysis).
+
+    When suggest_tags=True, emits a `Suggested tags:` line after each card based
+    on heuristic oracle-text matching. Pass `template_name` to restrict
+    suggestions to that template's vocabulary; `deck_id` augments the vocabulary
+    with tags defined in the deck's local tags.md.
     """
     try:
         with open(filepath) as f:
@@ -221,8 +325,19 @@ def cmd_batch(filepath, use_cache=True, max_age_sec=None):
         print(f"Error: File not found: {filepath}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"{'Name':<35} {'Type':<30} {'CMC':>4} {'Colors':<12}")
-    print("-" * 85)
+    vocabulary = None
+    if suggest_tags:
+        # Import locally so the script's import cost stays minimal when unused.
+        from tag_suggest import suggest_tags as _suggest
+
+        template_vocab, _ = _load_template_vocabulary(template_name)
+        deck_vocab = _load_deck_tags(deck_id)
+        if template_vocab is not None or deck_vocab:
+            vocabulary = (template_vocab or set()) | deck_vocab
+
+    if not verbose:
+        print(f"{'Name':<35} {'Type':<30} {'CMC':>4} {'Colors':<12}")
+        print("-" * 85)
 
     errors = []
     hit_api = False
@@ -237,6 +352,14 @@ def cmd_batch(filepath, use_cache=True, max_age_sec=None):
             if hit_api:
                 time.sleep(DELAY_SEC)
             hit_api = True
+        if verbose:
+            print(_format_card(card))
+            if suggest_tags:
+                tags = _suggest(card, vocabulary=vocabulary)
+                tag_str = " ".join(f"#{t}" for t in tags) if tags else "(none)"
+                print(f"Suggested tags: {tag_str}")
+            print()
+            continue
         colors = ", ".join(card.get("colors", [])) or "C"
         type_line = card.get("type_line", "N/A")
         if len(type_line) > 28:
@@ -245,6 +368,10 @@ def cmd_batch(filepath, use_cache=True, max_age_sec=None):
         if len(card_name) > 33:
             card_name = card_name[:32] + "…"
         print(f"{card_name:<35} {type_line:<30} {card.get('cmc', 0):>4.0f} {colors:<12}")
+        if suggest_tags:
+            tags = _suggest(card, vocabulary=vocabulary)
+            tag_str = " ".join(f"#{t}" for t in tags) if tags else "(none)"
+            print(f"    suggested: {tag_str}")
 
     if errors:
         print(f"\nFailed to look up {len(errors)} card(s):")
@@ -347,15 +474,34 @@ def main():
             sys.exit(1)
     use_cache = not no_cache
 
+    verbose = _extract_flag("--verbose")
+    suggest_tags_flag = _extract_flag("--suggest-tags")
+    template_name = _extract_value("--template")
+    deck_id = _extract_value("--deck")
+    max_pages_raw = _extract_value("--max-pages")
+    max_pages = 3
+    if max_pages_raw is not None:
+        try:
+            max_pages = int(max_pages_raw)
+            if max_pages < 0:
+                raise ValueError
+        except ValueError:
+            print("Error: --max-pages must be a non-negative integer (0 = unlimited)", file=sys.stderr)
+            sys.exit(1)
+
     cmd = sys.argv[1]
     if cmd == "search" and len(sys.argv) == 3:
         cmd_search(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec)
     elif cmd == "exact" and len(sys.argv) == 3:
-        cmd_exact(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec)
+        cmd_exact(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec,
+                  suggest_tags=suggest_tags_flag,
+                  template_name=template_name, deck_id=deck_id)
     elif cmd == "batch" and len(sys.argv) == 3:
-        cmd_batch(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec)
+        cmd_batch(sys.argv[2], use_cache=use_cache, max_age_sec=max_age_sec,
+                  verbose=verbose, suggest_tags=suggest_tags_flag,
+                  template_name=template_name, deck_id=deck_id)
     elif cmd == "query" and len(sys.argv) == 3:
-        cmd_query(sys.argv[2])
+        cmd_query(sys.argv[2], max_pages=max_pages, verbose=verbose)
     elif cmd == "cache":
         cmd_cache(sys.argv[2:])
     else:
